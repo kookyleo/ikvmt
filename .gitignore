@@ -1,3 +1,9 @@
-node_modules/
+/target/
+/artifacts/
+/node_modules/
+/tests/fixtures/*
+!/tests/fixtures/README.md
+*.cookies
+.env
 *.log
 .DS_Store
