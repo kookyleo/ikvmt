@@ -47,12 +47,8 @@ fn engine() -> Result<&'static OcrEngine> {
     ENGINE
         .get_or_init(|| {
             let load = || -> Result<OcrEngine> {
-                let detection = rten::Model::load_static_slice(include_bytes!(
-                    "../models/text-detection.onnx"
-                ))?;
-                let recognition = rten::Model::load_static_slice(include_bytes!(
-                    "../models/text-recognition.onnx"
-                ))?;
+                let detection = rten::Model::load_static_slice(ikvmt_ocr_detection::MODEL)?;
+                let recognition = rten::Model::load_static_slice(ikvmt_ocr_recognition::MODEL)?;
                 OcrEngine::new(OcrEngineParams {
                     detection_model: Some(detection),
                     recognition_model: Some(recognition),

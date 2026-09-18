@@ -13,6 +13,15 @@ AI agent / human → ikvmt → BMC HTTP + WebSocket → host VGA / keyboard
 
 The interaction loop is `open → observe → act → observe → close`. The agent views the image, interprets the interface, and chooses the next action. Successful input submission does not prove command completion; screenshots and OCR do not provide byte-exact stdout. This version does not expose a `run(command)` API that would imply those guarantees.
 
+## Install
+
+```sh
+cargo install ikvmt --locked
+ikvmt --help
+```
+
+Cargo downloads the two model crates along with the other build dependencies. The installed executable embeds both models; enabling OCR does not trigger a runtime download.
+
 ## Build and capture a screenshot
 
 ```sh
@@ -182,5 +191,7 @@ cargo run --release --locked --example ocr_corpus -- /path/to/screenshots /tmp/i
 See the [architecture notes (Chinese)](docs/architecture.zh.md) for the design and future scope. OCR fine-tuning is an optional enhancement; see the [feasibility evaluation](docs/OCR-FINETUNE-EVALUATION.zh.md) and [data source review](docs/OCR-DATA-SOURCES.zh.md), both in Chinese. The old JavaScript implementation and browser-based port proposal have been removed and remain available in Git history.
 
 English documentation uses `.md`; Chinese documentation uses `.zh.md`. Write commit subjects and bodies in English.
+
+The crate packaging and release procedure is documented in the [release guide (Chinese)](docs/RELEASING.zh.md).
 
 [Apache License 2.0](LICENSE)

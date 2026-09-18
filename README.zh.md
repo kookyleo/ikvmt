@@ -13,6 +13,15 @@ AI Agent / 人 → ikvmt → BMC HTTP + WebSocket → 宿主机 VGA / 键盘
 
 工具提供 `open → observe → act → observe → close`。Agent 查看图像、理解界面并决定下一步。输入提交成功不等于命令完成；截图和 OCR 也不等于逐字节完整的 stdout。首版不提供隐含这些保证的 `run(command)`。
 
+## 安装
+
+```sh
+cargo install ikvmt --locked
+ikvmt --help
+```
+
+Cargo 会将两个模型 crate 与其他构建依赖一起下载。安装得到的可执行文件仍内嵌两份模型，开启 OCR 不会触发运行时下载。
+
 ## 构建与单张截图
 
 ```sh
@@ -181,5 +190,7 @@ cargo run --release --locked --example ocr_corpus -- /path/to/screenshots /tmp/i
 架构与后续边界见 [设计说明](docs/architecture.zh.md)。OCR 微调是可选增强，评估和数据来源见 [微调评估](docs/OCR-FINETUNE-EVALUATION.zh.md) 与 [数据筛选](docs/OCR-DATA-SOURCES.zh.md)。旧 JS 实现和浏览器移植提案已移除，可从 Git 历史查阅。
 
 英文文档使用 `.md`，中文文档使用 `.zh.md`。提交标题与正文统一使用英文。
+
+crate 打包与发布步骤见 [发布说明](docs/RELEASING.zh.md)。
 
 [Apache License 2.0](LICENSE)

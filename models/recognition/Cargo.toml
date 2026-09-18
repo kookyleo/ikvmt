@@ -1,0 +1,12 @@
+[package]
+name = "ikvmt-ocr-recognition"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.94"
+description = "Bundled OCR text recognition model for ikvmt"
+license = "Apache-2.0 AND CC-BY-SA-4.0"
+repository = "https://github.com/kookyleo/ikvmt"
+readme = "README.md"
+keywords = ["ocr", "ikvm"]
+categories = ["computer-vision"]
+include = ["/src/lib.rs", "/text-recognition.onnx", "/README.md", "/LICENSE", "/LICENSE-CC-BY-SA-4.0.txt"]

@@ -662,6 +662,8 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ikvmt-ocr-detection",
+ "ikvmt-ocr-recognition",
  "image",
  "native-tls",
  "ocrs",
@@ -674,6 +676,14 @@ dependencies = [
  "tempfile",
  "tungstenite",
 ]
+
+[[package]]
+name = "ikvmt-ocr-detection"
+version = "0.2.0"
+
+[[package]]
+name = "ikvmt-ocr-recognition"
+version = "0.2.0"
 
 [[package]]
 name = "image"
