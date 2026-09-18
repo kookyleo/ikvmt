@@ -1,0 +1,25 @@
+{
+  "name": "ikvmt",
+  "version": "0.1.0",
+  "description": "Run shell commands and read the host console through a Supermicro BMC's HTML5 iKVM, fully headless (no SSH, no serial cable).",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "kookyleo",
+  "bin": {
+    "ikvmt": "./ikvmt.mjs"
+  },
+  "scripts": {
+    "start": "node ikvmt.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  },
+  "files": [
+    "ikvmt.mjs",
+    "README.md",
+    "LICENSE"
+  ]
+}
