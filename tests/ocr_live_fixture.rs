@@ -5,7 +5,7 @@ use std::path::Path;
 // option were dropped by the previous Tesseract backend. Release mode matters
 // for RTen inference, so run this explicitly with cargo test --release -- --ignored.
 #[test]
-#[ignore = "requires local private fixtures; see tests/fixtures/README.md"]
+#[ignore = "requires local private fixtures; see tests/fixtures/README.zh.md"]
 fn bundled_models_read_highlighted_row_and_popup_without_external_programs() {
     for (file, expected) in [
         (
@@ -19,7 +19,7 @@ fn bundled_models_read_highlighted_row_and_popup_without_external_programs() {
             .join(file);
         assert!(
             path.is_file(),
-            "local fixture missing: {}; see tests/fixtures/README.md",
+            "local fixture missing: {}; see tests/fixtures/README.zh.md",
             path.display()
         );
         let result = recognize(&path, Mode::Ocrs);

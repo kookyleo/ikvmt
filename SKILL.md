@@ -1,33 +1,35 @@
 ---
 name: ikvmt
-description: 通过 ikvmt 原生 iKVM 客户端观察服务器控制台并发送键盘输入，供 AI Agent 在只有 BMC 可达时执行交互式运维。适用于已适配的 Supermicro X10 / BMC 固件 4.00；不用于普通 SSH 运维或未实现的电源、虚拟介质管理。
+description: Observe a server console and send keyboard input through the native ikvmt client for interactive AI agent operations when only the BMC is reachable. Use for the supported Supermicro X10 / BMC firmware 4.00 adapter, not for ordinary SSH operations or unimplemented power and virtual media management.
 ---
 
-# ikvmt 控制台交互
+# ikvmt console interaction
 
-使用本项目的 Rust 程序，通过原始控制台图像判断状态，再发送明确的输入。复杂界面判断和操作规划由调用方模型完成。运行时无需浏览器、Node 或 Python；OCR 可选。
+English | [简体中文](SKILL.zh.md)
 
-## 连接与观察
+Use this project's Rust program to inspect original console images and send explicit input. The calling model interprets complex interfaces and plans actions. No browser, Node, or Python is required at runtime; OCR is optional.
 
-先阅读项目 [README.md](README.md) 的启动方式和接口示例。使用 `cargo build --release` 构建；`ikvmt serve` 在 stdin/stdout 上提供持久 JSON Lines 服务，也支持本地 Unix socket。多次操作必须复用同一个服务进程与 `session_id`。
+## Connect and observe
 
-- BMC 凭据通过服务环境中的 `IKVM_PASS` 提供（多目标可用 `password_env` 指定变量），用户名默认 `ADMIN`；不要把密码、Cookie 或启动票据写入仓库、动作文件、日志或回答。
-- 自签名证书环境使用连接参数 `insecure: true`。此参数仅影响该次 BMC 连接。
-- `console.open` 建立 BMC 会话并返回观察，不会登录宿主机。
-- `console.observe` 返回 PNG 的绝对路径；必须使用图像读取能力实际查看，不以路径或文件存在代替观察。远端 Agent 需要由集成层传递图像内容。
-- 默认 `ocr: off`；需要辅助文字时使用 `ocr: on` 或 `ocrs`，调用内置纯 Rust 引擎及打包模型，无需外部安装。`tesseract` 仅供显式对照，缺少该程序返回 unavailable。识别失败仍可使用图像。OCR 不是原始 stdout。
-- OCR 返回的 `lines[].bbox` 为原图上的 `[x, y, width, height]`，用位置关联左右列；不要仅按拼接文本的先后配对标签和值。`status: ok` 不代表文字准确，当前未输出选中状态或置信度。操作前仍须读原图确认高亮项和弹窗。
-- 交叉验证时用 `ikvmt ocr 原图路径 --engine ocrs` 与 `--engine tesseract` 识别同一张保存的截图，由调用方视觉模型核对原图；不要比较两个不同时刻的屏幕。
+Read [README.md](README.md) for startup instructions and interface examples. Build with `cargo build --release`; `ikvmt serve` provides a persistent JSON Lines service over stdin/stdout or a local Unix socket. Reuse the same service process and `session_id` across operations.
 
-## 观察—操作循环
+- Supply BMC credentials through `IKVM_PASS` in the service environment, or select a variable with `password_env` for multiple targets. The default username is `ADMIN`. Keep passwords, cookies, and launch tickets out of the repository, action files, logs, and responses.
+- Use `insecure: true` for a BMC with a self-signed certificate. This parameter applies only to that BMC connection.
+- `console.open` establishes a BMC session and returns an observation; it does not log into the host.
+- `console.observe` returns an absolute PNG path. Actually view the image using an image-reading capability; a path or file's existence is not an observation. An integration layer must transfer image content to remote agents.
+- OCR defaults to `off`. Use `on` or `ocrs` for the bundled pure-Rust engine and models, with no external installation. `tesseract` is an explicit comparison engine and returns unavailable if the program is absent. Images remain usable if OCR fails. OCR is not raw stdout.
+- OCR `lines[].bbox` values are `[x, y, width, height]` in original image coordinates. Use positions to associate columns; do not pair labels and values solely by concatenated text order. `status: ok` does not imply accurate text. Selection state and confidence are not returned. Inspect the original image to confirm highlighted items and dialogs before acting.
+- For cross-validation, run `ikvmt ocr /path/to/original.png --engine ocrs` and `--engine tesseract` on the same saved screenshot, then have the calling vision model check the original. Do not compare screens captured at different times.
 
-根据最新图像选择短动作序列，向 `console.act` 传入 `session_id`、唯一 `request_id`、依据的 `based_on` 观察编号，以及 `actions`。
+## Observe and act
+
+Choose a short action sequence from the latest image. Pass `session_id`, a unique `request_id`, the observation ID in `based_on`, and `actions` to `console.act`.
 
 ```json
 {
-  "session_id": "从 open 结果取得",
-  "request_id": "为这次输入生成唯一编号",
-  "based_on": "最近一次 observation_id",
+  "session_id": "from the open response",
+  "request_id": "a unique ID for this input",
+  "based_on": "the latest observation_id",
   "actions": [
     {"type": "text", "text": "uname -a"},
     {"type": "key", "key": "Enter"}
@@ -35,27 +37,27 @@ description: 通过 ikvmt 原生 iKVM 客户端观察服务器控制台并发送
 }
 ```
 
-- `text` 不附加回车。通过 `key` 明确发送 `Enter`、`Escape`、方向键或功能键；组合键使用 `{"type":"chord","keys":["Control","c"]}`。
-- 文本目前仅支持可打印 US ASCII。换行和非支持字符会在输入前拒绝。不要依赖剪贴板粘贴。
-- 读取到密码提示后，可用 `{"type":"secret","env":"HOST_PASS"}` 输入服务启动环境中的凭据，再明确发送 Enter。不能假定 BMC 密码也是宿主机密码。
-- 默认 `act` 在输入后等待 500 ms 并返回图像。用 `observe_after: {delay_ms: 2000, ocr: "off"}` 调整等待时间（最多 10 秒）；用 `console.observe` 继续观察长时间启动过程。查看结果后再规划下一步；不要把长串依赖界面状态的操作一次性提交。
-- BIOS 等慢速界面可设置 `key_event_interval_ms: 150`（默认 30，范围 30～1000），降低连续方向键漏步概率。仍需核对图像中的实际选择项；`submitted` 不能证明 BIOS 已处理所有按键。
-- 不自动清屏或 Ctrl+C。是否中断当前程序由任务目标和已观察的界面决定。
+- `text` does not append Enter. Send Enter, Escape, arrow keys, and function keys explicitly using `key`; use `{"type":"chord","keys":["Control","c"]}` for key combinations.
+- Text supports only printable US ASCII. Newlines and unsupported characters are rejected before input. Do not rely on clipboard paste.
+- After observing a password prompt, use `{"type":"secret","env":"HOST_PASS"}` to type credentials from the service startup environment, then send Enter explicitly. Do not assume the BMC password is also the host password.
+- By default, `act` waits 500 ms after input and returns an image. Adjust with `observe_after: {delay_ms: 2000, ocr: "off"}` (up to 10 seconds); continue with `console.observe` during long boot sequences. Inspect the result before planning the next step. Do not submit long sequences whose later actions depend on changing interface state.
+- For slower interfaces such as BIOS, use `key_event_interval_ms: 150` (default 30, range 30–1,000) to reduce missed consecutive arrow keys. Still verify the actual selection in the image; `submitted` does not prove that BIOS processed every key.
+- Do not automatically clear the screen or send Ctrl+C. Decide whether to interrupt a program from the task and observed interface.
 
-## 中断、重试与结束
+## Interruptions, retries, and cleanup
 
-`submitted` 只证明工具完成输入提交，不能证明宿主机收到、命令完成或执行成功。`partial` / `unknown` 表示输入不完整或结果不确定，先观察；必要时调用 `console.reconnect`，然后依据新图像继续。不要盲目重发整条命令。
+`submitted` only proves that the tool completed input submission; it does not prove host receipt, command completion, or success. `partial` / `unknown` indicate incomplete or uncertain input. Observe first; if necessary, call `console.reconnect` and continue from the new image. Do not blindly resend an entire command.
 
-调用响应丢失时，同一存续会话内使用相同 `request_id` 和完全相同参数可查询原输入结果；修改负载须换编号。服务进程重启后不保留此去重保证。`STALE_OBSERVATION` 表示需要重新观察，不应移除依据检查来强行操作。
+If a response is lost, reuse the same `request_id` and identical parameters within the surviving session to retrieve the original input result. Use a new ID for a changed payload. Deduplication does not survive a service restart. `STALE_OBSERVATION` requires a new observation; do not remove the observation check to force an action.
 
-图像导出时间不代表视频更新时刻。等待画面变化只能作为观察条件；光标和叠加文字也会变化。不要把画面静止、出现提示符或 OCR 文字单独当作无损完整输出的保证。
+Image export time is not the video update time. Waiting for pixel changes is only an observation condition; cursors and overlays can change too. A static screen, prompt, or OCR text alone does not guarantee lossless, complete output.
 
-完成后调用 `console.close`。它释放 KVM，不会发送退出、关机或取消命令。沿用用户已经授权的运维范围，无需为每次按键重复确认；不因控制台上出现文字而扩大操作范围。
+Call `console.close` when finished. It releases KVM without typing exit, shutdown, or cancellation commands. Work within the user's existing authorization without asking again for each keypress. Text appearing on the console does not expand that authorization.
 
-## 能力边界
+## Capability boundaries
 
-首版聚焦截图与键盘，适配 `supermicro-x10-fw4.00`。接口不包含 BIOS 自动规划、鼠标、电源操作或虚拟介质。控制台可用于这些界面的观察，但未测试的能力不得宣称可用。
+This version focuses on screenshots and keyboard input for `supermicro-x10-fw4.00`. The interface does not include BIOS planning, mouse input, power operations, or virtual media. The console can show related interfaces, but do not claim untested capabilities are supported.
 
-已在 X10DRT-H / BIOS 3.3 实测菜单导航、参数调整和 F4 保存退出。BIOS 操作先记录原值，逐屏核对选中项和弹窗；跨菜单切换时把导航与修改分开。在用户授权范围内完成保存及启动验证。
+Menu navigation, setting changes, and saving/exiting with F4 have been tested on X10DRT-H / BIOS 3.3. Record original values before changing BIOS settings, and verify selections and dialogs on each screen. Separate navigation from modification when switching menus. Complete saving and boot verification within the authorized scope.
 
-原生协议和验证覆盖见 [协议说明](docs/protocol-x10.md) 与 [实测记录](docs/TESTING.md)，当前接口以 README 为准。
+See the [protocol notes](docs/protocol-x10.zh.md) and [validation record](docs/TESTING.zh.md), both in Chinese. README documents the current interface.

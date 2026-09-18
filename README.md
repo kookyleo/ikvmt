@@ -1,45 +1,48 @@
 # ikvmt
 
-面向人和 AI Agent 的原生带外控制台工具。通过 BMC 的 HTTP/WebSocket 获取服务器 VGA 图像、发送键盘输入；使用 Rust 实现，运行时无需浏览器、Node、Python 或模型 API。OCR 默认关闭；开启后使用内置的纯 Rust `ocrs + RTen`，模型随二进制打包。Tesseract 仅保留为显式选择的对照引擎。
+English | [简体中文](README.zh.md)
 
-当前适配 **Supermicro X10DRT-H / BMC 固件 4.00 / IPMI 2.0**，已在真实设备验证截图、键盘、持续会话和重连。固件版本决定 HTML5 iKVM 私有协议；这里的 `fw4.00` 不是 IPMI 协议版本。其他平台尚未验证，不自动探测或切换厂商。
+A native out-of-band console tool for humans and AI agents. It retrieves server VGA images and sends keyboard input through the BMC's HTTP/WebSocket interface. Written in Rust, it runs without a browser, Node, Python, or a model API. OCR is off by default; enabling it uses the bundled pure-Rust `ocrs + RTen` engine and embedded models. Tesseract is available only as an explicitly selected comparison engine.
+
+The current adapter targets **Supermicro X10DRT-H / BMC firmware 4.00 / IPMI 2.0**. Screenshots, keyboard input, persistent sessions, and reconnection have been verified on real hardware. The firmware version determines the proprietary HTML5 iKVM protocol; `fw4.00` is not an IPMI protocol version. Other platforms have not been verified, and the tool does not automatically detect or switch vendors.
 
 ```text
-AI Agent / 人 → ikvmt → BMC HTTP + WebSocket → 宿主机 VGA / 键盘
-                ↑ PNG 图像、输入提交结果
+AI agent / human → ikvmt → BMC HTTP + WebSocket → host VGA / keyboard
+                    ↑ PNG images, input submission results
 ```
 
-工具提供 `open → observe → act → observe → close`。Agent 查看图像、理解界面并决定下一步。输入提交成功不等于命令完成；截图和 OCR 也不等于逐字节完整的 stdout。首版不提供隐含这些保证的 `run(command)`。
+The interaction loop is `open → observe → act → observe → close`. The agent views the image, interprets the interface, and chooses the next action. Successful input submission does not prove command completion; screenshots and OCR do not provide byte-exact stdout. This version does not expose a `run(command)` API that would imply those guarantees.
 
-## 构建与单张截图
+## Build and capture a screenshot
 
 ```sh
 cargo build --release --locked
 ./target/release/ikvmt --help
 
-# 通过服务环境提供 BMC 密码，避免放入参数、JSON、源码或日志。
-# 在 zsh 中可使用隐藏输入：
+# Supply the BMC password through the service environment,
+# keeping it out of arguments, JSON, source files, and logs.
+# Hidden input in zsh:
 read -rs 'IKVM_PASS?BMC password: '
 export IKVM_PASS
 
 ./target/release/ikvmt shot 192.0.2.10 --insecure --output-dir artifacts
 ```
 
-`shot` 返回 PNG 绝对路径和元数据，然后关闭连接；不会向宿主机发送按键。示例 IP 需替换为实际 BMC 地址。`--insecure` 为自签名证书关闭证书校验，默认启用校验。用户名默认 `ADMIN`，可用 `--username` 或 `IKVM_USER` 修改。可选 `--ocr` 使用内置 OCR；`--ocr --ocr-engine tesseract` 才会调用本机 Tesseract。OCR 失败不影响原图返回。
+`shot` returns an absolute PNG path and metadata, then closes the connection without sending host keystrokes. Replace the example IP with your BMC address. `--insecure` disables certificate verification for self-signed certificates; verification is enabled by default. The default username is `ADMIN`, configurable through `--username` or `IKVM_USER`. Add `--ocr` for native OCR; only `--ocr --ocr-engine tesseract` invokes a local Tesseract installation. OCR failure does not prevent the original image from being returned.
 
-要求 Rust 1.94 或更新版本，已在 macOS arm64、Rust 1.95 构建验证。程序使用系统 TLS；Linux 构建通常需要 OpenSSL 开发依赖，尚未跨平台实测。`ipmitool` 仅用于开发时独立核对设备信息，不是运行依赖。发布二进制位于 `target/release/ikvmt`。
+Requires Rust 1.94 or later; builds have been verified on macOS arm64 with Rust 1.95. The program uses system TLS. Linux builds generally require OpenSSL development dependencies and have not yet been tested. `ipmitool` was used independently during development to check device information and is not a runtime dependency. The release binary is `target/release/ikvmt`.
 
-## Agent 接入
+## Agent integration
 
-项目内 [SKILL.md](SKILL.md) 是 Agent 操作说明。以下两种方式都使用同一 JSON Lines 协议：每行一条请求，每行一条响应，诊断写 stderr。它是本地服务协议，当前未实现 MCP 协议适配。
+[SKILL.md](SKILL.md) provides agent operating instructions, also available in [Chinese](SKILL.zh.md). Both service modes below use the same JSON Lines protocol: one request and one response per line, with diagnostics on stderr. This is a local service protocol; an MCP adapter is not implemented.
 
-直接让 Agent 管理持久子进程的 stdin/stdout：
+Let the agent manage a persistent child process through stdin/stdout:
 
 ```sh
 ./target/release/ikvmt serve --output-dir artifacts
 ```
 
-需要跨 CLI 调用复用会话时，先在一个终端启动本地 Unix socket 服务：
+To reuse a session across CLI calls, start a local Unix socket service in one terminal:
 
 ```sh
 mkdir -p artifacts/runtime
@@ -48,7 +51,7 @@ chmod 700 artifacts/runtime
   --socket "$PWD/artifacts/runtime/control.sock" --output-dir artifacts
 ```
 
-然后在其他终端调用：
+Then call it from another terminal:
 
 ```sh
 ./target/release/ikvmt call console.open \
@@ -56,9 +59,9 @@ chmod 700 artifacts/runtime
   --params '{"target":"192.0.2.10","username":"ADMIN","insecure":true}'
 ```
 
-BMC 密码必须在 **serve 进程的环境** 中；`call` 的环境不会传入已启动的服务。多台 BMC 可在 `open` 使用 `password_env` 指定不同环境变量，默认 `IKVM_PASS`。宿主机密码与 BMC 密码分开管理。
+The BMC password must be in the **serve process environment**. The environment of `call` is not forwarded to an already running service. For multiple BMCs, use `password_env` in `open` to select different environment variables; the default is `IKVM_PASS`. Manage host credentials separately from BMC credentials.
 
-一条完整的 stdin 请求和响应外层结构：
+A complete stdin request and an abbreviated response envelope:
 
 ```json
 {"id":1,"method":"console.open","params":{"target":"192.0.2.10","insecure":true}}
@@ -68,26 +71,26 @@ BMC 密码必须在 **serve 进程的环境** 中；`call` 的环境不会传入
 {"id":1,"result":{"session":{"session_id":"…"},"observation":{"observation_id":"…","image":{"path":"/absolute/path.png"}}}}
 ```
 
-上面的响应为结构简写。错误返回 `{"id":1,"error":{"code":"…","message":"…"}}`；`call` 在错误时退出码为 1。`id` 仅用于请求响应关联，输入去重使用 `params.request_id`。
+Errors use `{"id":1,"error":{"code":"…","message":"…"}}`; `call` exits with status 1 on an error. `id` only correlates requests and responses. Input deduplication uses `params.request_id`.
 
-## 交互接口
+## Interaction interface
 
-| 方法 | 参数与行为 |
+| Method | Parameters and behavior |
 | --- | --- |
-| `console.open` | `target` 必填；`username` 默认 ADMIN，`password_env` 默认 IKVM_PASS，`profile` 默认 `supermicro-x10-fw4.00`，`insecure` 默认 false。返回会话及首张观察 |
-| `console.observe` | `session_id`；可选 `ocr: "on"` 和 `wait: {since: "观察编号", timeout_ms: 5000}`。最多等待 10 秒像素变化，超时也返回观察 |
-| `console.act` | `session_id`、`request_id`、`based_on`、`actions`；默认等待 500 ms 后观察，可用 `observe_after: {delay_ms: 1000, ocr: "off"}` 调整，或 `false` 关闭 |
-| `console.reconnect` | `session_id`；关闭旧连接、增加 `connection_epoch`、重建连接并观察，不重放键盘输入 |
-| `console.close` | `session_id`；释放连接。可重复调用；不输入退出命令、不关闭宿主机 |
-| `console.status` / `console.list` | 前者需要 `session_id`；后者无参数，列出本服务进程的会话状态 |
+| `console.open` | Requires `target`; defaults: `username: ADMIN`, `password_env: IKVM_PASS`, `profile: supermicro-x10-fw4.00`, `insecure: false`. Returns a session and its initial observation |
+| `console.observe` | `session_id`; optional `ocr: "on"` and `wait: {since: "observation ID", timeout_ms: 5000}`. Waits up to 10 seconds for pixel changes and returns an observation even on timeout |
+| `console.act` | `session_id`, `request_id`, `based_on`, `actions`; observes after a 500 ms delay by default. Set `observe_after: {delay_ms: 1000, ocr: "off"}` to adjust, or `false` to disable the observation |
+| `console.reconnect` | `session_id`; closes the old connection, increments `connection_epoch`, reconnects, and observes. Does not replay keyboard input |
+| `console.close` | `session_id`; releases the connection. Repeat calls are safe; it does not type an exit command or shut down the host |
+| `console.status` / `console.list` | The former requires `session_id`; the latter takes no parameters and lists sessions in this service process |
 
-根据 `open` 返回的 PNG 实际查看控制台，再把获得的编号填入动作文件 `act.json`：
+View the PNG returned by `open`, then put the returned identifiers into an action file, `act.json`:
 
 ```json
 {
-  "session_id": "从 open 取得",
-  "request_id": "为这次输入生成唯一编号",
-  "based_on": "所依据的 observation_id",
+  "session_id": "from the open response",
+  "request_id": "a unique ID for this input",
+  "based_on": "the observation_id used to choose this action",
   "actions": [
     {"type": "text", "text": "uname -a"},
     {"type": "key", "key": "Enter"}
@@ -101,66 +104,67 @@ BMC 密码必须在 **serve 进程的环境** 中；`call` 的环境不会传入
   --socket "$PWD/artifacts/runtime/control.sock" --request-file act.json
 ```
 
-输入动作：
+Input actions:
 
-- `text`：仅输入可打印 US ASCII，不自动补 Enter。不支持 Unicode、换行或剪贴板。前提是宿主机当前使用 US 键盘布局，CapsLock 状态由调用方观察处理。
-- `key`：一次按下和释放。支持 Enter、Escape、Tab、Backspace、方向键、Home/End、PageUp/PageDown、Insert/Delete、F1–F12、修饰键等。
-- `chord`：如 `{"type":"chord","keys":["Control","c"]}`，按序按下、逆序释放。
-- `secret`：如 `{"type":"secret","env":"HOST_PASS"}`，从服务环境读取后按文本输入，不回显凭据，不补回车。只有看到正确输入提示后才使用。
+- `text`: types printable US ASCII without appending Enter. Unicode, newlines, and clipboard operations are not supported. The host must use a US keyboard layout; the caller must observe and handle CapsLock state.
+- `key`: one press and release. Supports Enter, Escape, Tab, Backspace, arrow keys, Home/End, PageUp/PageDown, Insert/Delete, F1–F12, modifier keys, and others.
+- `chord`: for example, `{"type":"chord","keys":["Control","c"]}`. Presses in order and releases in reverse order.
+- `secret`: for example, `{"type":"secret","env":"HOST_PASS"}`. Reads from the service environment and types the value without echoing credentials in the response or appending Enter. Use only after observing the correct input prompt.
 
-每次最多 32 个动作、累计 4096 个文本字符。所有字符与按键在发送前完成验证；按键事件间隔至少约 30 ms，长文本会较慢。输入过程中持续处理视频更新。
+Each request allows up to 32 actions and a total of 4,096 text characters. All characters and keys are validated before sending. Keyboard events are spaced at least approximately 30 ms apart, so long text can be slow. Video updates continue to be processed during input.
 
-BIOS 等较慢界面可在 `console.act` 顶层设置 `"key_event_interval_ms": 150`，调整每次按下/释放报文之间的间隔。默认 30 ms，允许 30～1000 ms；不合法值在发送前拒绝。实测该 BIOS 在 30 ms 下偶发漏掉连续方向键，应使用较慢节奏并观察实际选择项。它与输入结束后等待截图的 `observe_after.delay_ms` 是两个独立参数。
+For slower interfaces such as BIOS, set `"key_event_interval_ms": 150` at the top level of `console.act` to adjust the interval between key press/release messages. The default is 30 ms, with an allowed range of 30–1,000 ms; invalid values are rejected before sending. The tested BIOS occasionally missed consecutive arrow keys at 30 ms, so use a slower pace and check the actual selection. This interval is independent of `observe_after.delay_ms`, which controls the wait between completed input and the screenshot.
 
-## 可选原生 OCR
+## Optional native OCR
 
-`console.observe` 的 `ocr` 及 `console.act.observe_after.ocr` 支持 `off`（默认）、`on` / `ocrs`（内置引擎）、`tesseract`（外部对照）。选择内置引擎时无需 Tesseract、Python、模型 API 或额外下载；不会自动降级到外部引擎。
+The `ocr` field in `console.observe` and `console.act.observe_after` accepts `off` (default), `on` / `ocrs` (bundled engine), or `tesseract` (external comparison). The bundled engine requires no Tesseract, Python, model API, or additional downloads, and does not automatically fall back to an external engine.
 
-也可对已有截图离线识别，便于对同一帧交叉验证：
+Run OCR on an existing screenshot to compare engines on the same frame:
 
 ```sh
 ./target/release/ikvmt ocr /absolute/path.png
 ./target/release/ikvmt ocr /absolute/path.png --engine tesseract
 ```
 
-内置引擎返回 `engine: "ocrs"`、`runtime: "rten"`、`models: "bundled"`、`text`、`lines: [{text, bbox: [x, y, width, height]}]` 和 `elapsed_ms`。位置框使用原始图像坐标并裁到图像边界；左右列可能分别输出，不应按文本顺序直接关联 BIOS 项目与值。没有选中状态或识别置信度字段。
+The native engine returns `engine: "ocrs"`, `runtime: "rten"`, `models: "bundled"`, `text`, `lines: [{text, bbox: [x, y, width, height]}]`, and `elapsed_ms`. Bounding boxes use original image coordinates and are clipped to its boundaries. Left and right columns may be returned separately; do not pair BIOS labels and values solely by text order. Selection state and recognition confidence are not provided.
 
-`status: ok` 仅代表推理完成；可能误读字符、漏行，也不能识别所有选中项。BIOS 修改须结合原图核对标签、值、位置和高亮。模型以拉丁字符为主，不保证中文或精确终端转录。实测见 [验证记录](docs/TESTING.md)。
+`status: ok` only means inference completed. OCR may misread characters, omit lines, or miss selected items. Check labels, values, positions, and highlights against the original image before changing BIOS settings. The model primarily supports Latin characters and does not guarantee Chinese recognition or exact terminal transcription. See the [validation record (Chinese)](docs/TESTING.zh.md).
 
-模型首次使用时加载，后续在服务进程中复用；约 12.2 MB 权重内嵌到二进制。权重采用 CC BY-SA 4.0，随含模型的程序分发时须附带 [来源与归属](models/README.md) 和 [模型许可证](models/LICENSE-CC-BY-SA-4.0.txt)。项目代码仍为 Apache-2.0。
+Models load lazily on first use and are reused within the service process. Approximately 12.2 MB of weights are embedded in the binary. The weights are CC BY-SA 4.0; distributions containing them must include the [source attribution](models/README.md) and [model license](models/LICENSE-CC-BY-SA-4.0.txt). The project source code remains Apache-2.0.
 
-## 结果含义与重试
+## Result semantics and retries
 
-观察包含 PNG 路径、尺寸、像素 SHA-256、`observation_id`、连接代次和输入修订号。`exported_at_ms` 是本地导出时间；`video.last_update_received_at_ms` 与 `update_seq` 表示已解码的视频更新。连接中断时旧图标记 `image.source: cached`；无信号时图像为空。`wait_satisfied` 不表示命令已完成，光标闪烁也会满足像素变化条件。
+An observation contains a PNG path, dimensions, pixel SHA-256, `observation_id`, connection epoch, and input revision. `exported_at_ms` is the local export time; `video.last_update_received_at_ms` and `update_seq` describe decoded video updates. After disconnection, an old image is marked `image.source: cached`; when there is no signal, the image is null. `wait_satisfied` does not mean a command has finished: cursor blinking can also satisfy the pixel-change condition.
 
-`input.status: submitted` 只表示所有键盘报文已提交。`partial`、`unknown` 表示可能已输入一部分；先观察现场，再决定恢复动作。`not_submitted` 表示未提交输入。不自动清屏、Ctrl+C、登录宿主机或重发 Enter。
+`input.status: submitted` only means all keyboard messages were submitted. `partial` and `unknown` mean some input may have been sent; observe the current state before choosing recovery actions. `not_submitted` means no input was submitted. The tool does not automatically clear the screen, send Ctrl+C, log into the host, or resend Enter.
 
-同一存续会话内，相同 `request_id` 和完全相同负载返回缓存结果，不再次输入；编号相同但负载不同返回 `REQUEST_ID_CONFLICT`。已发生其他输入或重连的旧观察返回 `STALE_OBSERVATION`。服务重启后无去重记录，不能盲目重试。截图失败也保留已发生输入的结果。
+Within a surviving session, the same `request_id` and identical payload return the cached result without repeating input. Reusing an ID with a different payload returns `REQUEST_ID_CONFLICT`. An observation predating other input or reconnection is rejected with `STALE_OBSERVATION`. Deduplication records do not survive a service restart, so do not retry blindly. Input results are retained even if the subsequent screenshot fails.
 
-`open` / `reconnect` 没有请求去重；若响应丢失，先调用 `console.list` / `console.status` 查看状态。服务按请求串行执行，视频接收在独立线程中持续运行；当前不是可取消的异步任务系统。
+`open` and `reconnect` do not deduplicate requests. If a response is lost, check `console.list` or `console.status` first. The service executes requests serially while a separate thread continuously receives video. It is not a cancellable asynchronous task system.
 
-完成后明确调用 `console.close`。stdin 服务收到 EOF 会清理会话；Unix socket 服务应先关闭会话再终止进程。异常杀进程可能留下暂时的 BMC 占位及本地 socket 文件；确认服务已退出后再删除自己创建的旧 socket。程序不会自动覆盖已有 socket。
+Call `console.close` explicitly when finished. The stdin service cleans up sessions on EOF; close sessions before terminating a Unix socket service. Killing the process unexpectedly may leave temporary BMC session occupancy and a local socket file. Remove only your own stale socket after confirming that the service has exited. The program does not overwrite an existing socket automatically.
 
-## 范围与限制
+## Scope and limitations
 
-- 当前验证的是单一机型和固件。已在四台同型机器实测 Linux 重启、POST、BIOS 菜单导航、保存设置及返回 Proxmox 登录界面；进入 BIOS 的一次性启动标记由 ipmitool 设置。未实现 BIOS 自动规划、鼠标、电源管理、虚拟介质或 SOL。
-- AST2100 编码 87 已真实验证；部分未知块格式会明确报错。编码 88 只接受完整 JPEG 负载，尚未设备验证。
-- 图像只反映可见屏幕，不能无损提取滚屏前内容、区分 stdout/stderr、获得退出码或证明长命令输出完整。可分页或缩短输出，由外部模型逐屏判断；可靠字节回传需要另建明确协议。
-- OCR 是可选辅助，实测仍会误读符号和字符，不作为完整性保证。
-- 没有自动空闲回收、磁盘配额或持久化恢复；调用方负责关闭会话和清理截图。PNG 在 Unix 上以 0600 创建，socket 仅限本机用户访问。截图可能包含控制台中的敏感内容。
-- 同一服务对完全相同的目标字符串拒绝第二个活动会话；不要用 IP/主机名等不同别名并发连接同一 BMC。
+- Validation currently covers one hardware model and firmware. Linux reboot, POST, BIOS navigation, saving settings, and returning to the Proxmox login screen have been tested on four matching machines. The one-time BIOS boot flag was set using ipmitool. BIOS planning, mouse input, power management, virtual media, and SOL are not implemented.
+- AST2100 encoding 87 has been verified on hardware; some unknown block formats return explicit errors. Encoding 88 only accepts complete JPEG payloads and has not been verified on hardware.
+- Images represent only the visible screen. They cannot recover text that has scrolled away, distinguish stdout from stderr, retrieve exit codes, or prove that long command output is complete. Page or shorten output for the external model to inspect each screen; reliable byte transfer requires a separate explicit protocol.
+- OCR is an optional aid. It still misreads symbols and characters and does not guarantee completeness.
+- There is no automatic idle cleanup, disk quota, or persistent recovery. Callers must close sessions and clean up screenshots. PNGs are created with mode 0600 on Unix, and the socket is accessible only to the local user. Screenshots may contain sensitive console content.
+- The service rejects a second active session for an identical target string. Do not use different IP/hostname aliases to open concurrent sessions to the same BMC.
 
-## 开发
+## Development
 
 ```text
-src/interface.rs                    JSON Lines 服务
-src/console.rs                      会话、观察、输入
-src/ocr.rs                          原生 OCR 与显式 Tesseract 对照
-models/                             内嵌权重及来源、许可
-src/vendor/supermicro/x10_fw_4_00/   认证、私有 RFB、键盘、AST 解码
-SKILL.md                            Agent 操作说明
-docs/protocol-x10.md                 协议说明
-docs/TESTING.md                      验证记录
+src/interface.rs                    JSON Lines service
+src/console.rs                      Sessions, observations, input
+src/ocr.rs                          Native OCR and explicit Tesseract comparison
+models/                             Embedded weights, attribution, and license
+src/vendor/supermicro/x10_fw_4_00/   Authentication, private RFB, keyboard, AST decoding
+SKILL.md                            Agent operating instructions
+SKILL.zh.md                         Chinese agent operating instructions
+docs/protocol-x10.zh.md              Protocol notes (Chinese)
+docs/TESTING.zh.md                   Validation record (Chinese)
 ```
 
 ```sh
@@ -169,12 +173,14 @@ cargo test --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
 
-真实 BIOS 截图与标注只保存在本地，不随仓库发布。有对应本地夹具时，可按 [夹具说明](tests/fixtures/README.md) 运行真实模型测试；自己的截图目录可用下列命令离线回放，检查识别状态和文字框边界：
+Real BIOS screenshots and annotations stay local and are not published with the repository. With the required local fixtures, follow the [fixture notes (Chinese)](tests/fixtures/README.zh.md) to run the model test. To replay your own screenshot directory offline and check inference status and bounding-box boundaries:
 
 ```sh
 cargo run --release --locked --example ocr_corpus -- /path/to/screenshots /tmp/ikvmt-ocr.jsonl
 ```
 
-架构与后续边界见 [设计说明](docs/architecture.md)。OCR 微调是可选增强，评估和数据来源见 [微调评估](docs/OCR-FINETUNE-EVALUATION.md) 与 [数据筛选](docs/OCR-DATA-SOURCES.md)。旧 JS 实现和浏览器移植提案已移除，可从 Git 历史查阅。
+See the [architecture notes (Chinese)](docs/architecture.zh.md) for the design and future scope. OCR fine-tuning is an optional enhancement; see the [feasibility evaluation](docs/OCR-FINETUNE-EVALUATION.zh.md) and [data source review](docs/OCR-DATA-SOURCES.zh.md), both in Chinese. The old JavaScript implementation and browser-based port proposal have been removed and remain available in Git history.
+
+English documentation uses `.md`; Chinese documentation uses `.zh.md`. Write commit subjects and bodies in English.
 
 [Apache License 2.0](LICENSE)

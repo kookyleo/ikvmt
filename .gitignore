@@ -2,7 +2,7 @@
 /artifacts/
 /node_modules/
 /tests/fixtures/*
-!/tests/fixtures/README.md
+!/tests/fixtures/README.zh.md
 *.cookies
 .env
 *.log

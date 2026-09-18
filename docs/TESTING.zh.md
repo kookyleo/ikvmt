@@ -48,7 +48,7 @@ cargo run --release --locked --offline --example ocr_corpus -- tests/fixtures /t
 
 这是现场记录的后端耗时，非受控性能基准；Rust 复用模型，Tesseract 每图启动子进程，不含 BMC 截图等待或外部模型判断。未对整套图片逐字标注，不报告总体准确率。
 
-使用 `PATH=/nonexistent` 运行 release 二进制的原生 OCR 仍可识别，确认不依赖外部 OCR 程序。模型及许可见 [models/README.md](../models/README.md)，本地菜单夹具的用途见 [fixtures](../tests/fixtures/README.md)。截图及标注不随仓库发布。
+使用 `PATH=/nonexistent` 运行 release 二进制的原生 OCR 仍可识别，确认不依赖外部 OCR 程序。模型及许可见 [models/README.md](../models/README.md)，本地菜单夹具的用途见 [fixtures](../tests/fixtures/README.zh.md)。截图及标注不随仓库发布。
 
 ## 未覆盖与本地证据
 

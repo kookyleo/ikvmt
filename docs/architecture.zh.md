@@ -40,7 +40,7 @@ CLI / JSON Lines
 
 1. 验证真实网络故障发生在按下/释放之间的行为、长时间连接、独立无信号恢复和其他平台构建。
 2. 若需要完整、可校验的 shell 结果，新增有完成标记、分块、长度/校验及恢复机制的回传协议。截图/OCR 无法提供原始 stdout、stderr 和退出码保证。
-3. OCR 微调与交互状态模型属于可选增强，详见 [微调评估](OCR-FINETUNE-EVALUATION.md)。
+3. OCR 微调与交互状态模型属于可选增强，详见 [微调评估](OCR-FINETUNE-EVALUATION.zh.md)。
 4. 根据具体需求增加其他厂商适配、MCP、鼠标、电源或虚拟介质能力；这些不是当前已实现功能。
 
-可执行接口见 [README](../README.md)，验证证据与限制见 [TESTING](TESTING.md)。
+可执行接口见 [README](../README.zh.md)，验证证据与限制见 [TESTING](TESTING.zh.md)。
