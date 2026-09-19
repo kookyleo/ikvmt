@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-面向人和 AI Agent 的原生带外控制台工具。通过 BMC 的 HTTP/WebSocket 获取服务器 VGA 图像、发送键盘输入；使用 Rust 实现，运行时无需浏览器、Node、Python 或模型 API。OCR 默认关闭；开启后使用内置的纯 Rust `ocrs + RTen`，模型随二进制打包。Tesseract 仅保留为显式选择的对照引擎。
+面向人和 AI Agent 的原生带外控制台工具。通过 BMC 的 HTTP/WebSocket 获取服务器 VGA 图像、发送键盘输入，以及接入本地 ISO 或裸磁盘镜像；使用 Rust 实现，运行时无需浏览器、Node、Python 或模型 API。OCR 默认关闭；开启后使用内置的纯 Rust `ocrs + RTen`，模型随二进制打包。Tesseract 仅保留为显式选择的对照引擎。
 
 当前适配 **Supermicro X10DRT-H / BMC 固件 4.00 / IPMI 2.0**，已在真实设备验证截图、键盘、持续会话和重连。固件版本决定 HTML5 iKVM 私有协议；这里的 `fw4.00` 不是 IPMI 协议版本。其他平台尚未验证，不自动探测或切换厂商。
 
@@ -123,6 +123,41 @@ BMC 密码必须在 **serve 进程的环境** 中；`call` 的环境不会传入
 
 BIOS 等较慢界面可在 `console.act` 顶层设置 `"key_event_interval_ms": 150`，调整每次按下/释放报文之间的间隔。默认 30 ms，允许 30～1000 ms；不合法值在发送前拒绝。实测该 BIOS 在 30 ms 下偶发漏掉连续方向键，应使用较慢节奏并观察实际选择项。它与输入结束后等待截图的 `observe_after.delay_ms` 是两个独立参数。
 
+## 虚拟介质与镜像占用
+
+虚拟介质从 ikvmt 0.3.0 起提供。它使用独立的原生 WebSocket 连接，无需浏览器，也无需先打开控制台。镜像按主机请求逐块传输；主机使用设备期间，服务必须持续运行并保持连接。
+
+| 方法 | 参数与行为 |
+| --- | --- |
+| `media.mount` | `target`、`image`（服务所在机器的路径）、`kind: "cdrom"` 或 `"disk"`；可选 `writable`（默认 false）、`slot`（0～2，默认 0）。认证参数同 `console.open`，返回 `media_id` |
+| `media.status` | `media_id`；返回连接状态、镜像锁、读写字节数、SCSI 命令及拒绝计数 |
+| `media.list` | 列出本进程的介质会话，包括已断线会话 |
+| `media.unmount` | `media_id`；同步本地镜像、请求 BMC 拔出、停止服务并释放锁；可重复调用 |
+
+```sh
+export IKVM_SOCKET="$PWD/artifacts/runtime/control.sock"
+ikvmt media mount 192.0.2.10 /absolute/install.iso --kind cdrom --insecure
+
+# 另一种选择：先卸载原介质。裸磁盘须预先准备，可写须显式开启。
+ikvmt media mount 192.0.2.10 /absolute/transfer.img --kind disk --writable --insecure
+ikvmt media list
+ikvmt media status m-from-mount-response
+# 先在主机 sync 并卸载文件系统：
+ikvmt media unmount m-from-mount-response
+```
+
+`ikvmt media` 与 `ikvmt call media.*` 共用同一 API 和 JSON 响应。用 `--socket` 或 `IKVM_SOCKET` 指向已启动的服务。CLI 的镜像相对路径以调用方为准；API 路径由服务解释，建议用绝对路径。未确认 BMC 拔出时，卸载命令返回非零退出码。完整响应、错误、生命周期和设计依据见[介质参考](docs/virtual-media.zh.md)。
+
+只接受已存在的普通文件，不接受物理磁盘。光盘采用 2048 字节扇区，始终只读；裸磁盘采用 512 字节扇区。文件长度须对齐，服务不会扩容。工具提供块设备，镜像内部需要自己的分区/文件系统，并非直接共享一个目录；不会自动重启主机或修改启动顺序。
+
+`state: attached` 表示 BMC 已确认接入；`host_enumeration: not_observed` 表示工具未观察主机枚举。需在主机核对新 USB 设备的型号和容量，不要固定假设为 `/dev/sdb`。`media.mount` 不去重，响应丢失时先查 `media.list`。已占用的 BMC 槽位会被拒绝，不替换现有介质。
+
+镜像可动态转交：**挂载并申请锁 → 使用 → 主机 sync、卸载文件系统 → media.unmount 释放 → 下一位挂载**。只读持共享锁，可写持独占锁；冲突返回 `MEDIA_BUSY`。`image_lock` 返回 `shared`、`exclusive` 或 `released`。断线或工作线程 panic 后仍保留锁，直到显式调用 `media.unmount`；没有自动重连、重放写入、超时转交或抢占。故障后先检查、恢复文件系统再转交。这是本机协作式文件锁，不是分布式租约，也不能阻止其它程序绕过锁修改或挂载文件。远端使用前先卸载本机文件系统，本机使用前先在远端卸载并拔出。
+
+每次写入须同步到本地镜像后才回复成功；未知命令、格式错误、越界写入均拒绝。不完整写入遇到断线不会执行，但完整写入后丢失回复仍可能造成主机视角的结果不确定。`media.unmount` 无法替主机刷新文件系统缓存，必须先在主机执行 `sync`、卸载文件系统。断线返回 `state: disconnected` 和错误；60 秒没有 BMC 流量也会停止服务。进程退出会释放本地锁。
+
+已在支持的固件、槽位 0 验证：ISO 文件读取、16 MiB FAT 磁盘、远端创建文件、1 MiB 随机文件回到本机后 SHA-256 一致、只读写入拒绝。槽位 1/2、安装盘启动、长时间负载和其它固件尚未验证。此功能用于离线传递文件，不作为运行 VM 的存储。
+
 ## 可选原生 OCR
 
 `console.observe` 的 `ocr` 及 `console.act.observe_after.ocr` 支持 `off`（默认）、`on` / `ocrs`（内置引擎）、`tesseract`（外部对照）。选择内置引擎时无需 Tesseract、Python、模型 API 或额外下载；不会自动降级到外部引擎。
@@ -154,9 +189,9 @@ BIOS 等较慢界面可在 `console.act` 顶层设置 `"key_event_interval_ms": 
 
 ## 范围与限制
 
-- 当前验证的是单一机型和固件。已在四台同型机器实测 Linux 重启、POST、BIOS 菜单导航、保存设置及返回 Proxmox 登录界面；进入 BIOS 的一次性启动标记由 ipmitool 设置。未实现 BIOS 自动规划、鼠标、电源管理、虚拟介质或 SOL。
+- 当前验证的是单一机型和固件。已在四台同型机器实测 Linux 重启、POST、BIOS 菜单导航、保存设置及返回 Proxmox 登录界面；进入 BIOS 的一次性启动标记由 ipmitool 设置。未实现 BIOS 自动规划、鼠标、电源管理或 SOL；原生虚拟介质见上文。
 - AST2100 编码 87 已真实验证；部分未知块格式会明确报错。编码 88 只接受完整 JPEG 负载，尚未设备验证。
-- 图像只反映可见屏幕，不能无损提取滚屏前内容、区分 stdout/stderr、获得退出码或证明长命令输出完整。可分页或缩短输出，由外部模型逐屏判断；可靠字节回传需要另建明确协议。
+- 图像只反映可见屏幕，不能无损提取滚屏前内容、区分 stdout/stderr、获得退出码或证明长命令输出完整。可分页或缩短输出，由外部模型逐屏判断；精确字节可通过虚拟介质等文件通道回传，命令完成及退出码仍需明确的结果协议。
 - OCR 是可选辅助，实测仍会误读符号和字符，不作为完整性保证。
 - 没有自动空闲回收、磁盘配额或持久化恢复；调用方负责关闭会话和清理截图。PNG 在 Unix 上以 0600 创建，socket 仅限本机用户访问。截图可能包含控制台中的敏感内容。
 - 同一服务对完全相同的目标字符串拒绝第二个活动会话；不要用 IP/主机名等不同别名并发连接同一 BMC。
@@ -166,6 +201,8 @@ BIOS 等较慢界面可在 `console.act` 顶层设置 `"key_event_interval_ms": 
 ```text
 src/interface.rs                    JSON Lines 服务
 src/console.rs                      会话、观察、输入
+src/media.rs                        介质会话与镜像占用
+src/media/scsi.rs                   文件支持的 SCSI 块设备
 src/ocr.rs                          原生 OCR 与显式 Tesseract 对照
 models/                             内嵌权重及来源、许可
 src/vendor/supermicro/x10_fw_4_00/   认证、私有 RFB、键盘、AST 解码

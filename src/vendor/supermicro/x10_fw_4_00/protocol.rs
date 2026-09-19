@@ -39,7 +39,7 @@ pub fn auth_response(ticket: &str) -> Result<Vec<u8>> {
     Ok(response)
 }
 
-fn timeout_socket(ws: &Socket, d: Duration) -> Result<()> {
+pub(super) fn timeout_socket(ws: &Socket, d: Duration) -> Result<()> {
     let tcp = match ws.get_ref() {
         MaybeTlsStream::Plain(s) => s,
         MaybeTlsStream::NativeTls(s) => s.get_ref(),
@@ -50,36 +50,52 @@ fn timeout_socket(ws: &Socket, d: Duration) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn connect_socket(web: &WebSession, path: &str) -> Result<Socket> {
+    let mut url = reqwest::Url::parse(&web.ws_url)?;
+    url.set_path(path);
+    let mut req = url.as_str().into_client_request()?;
+    req.headers_mut()
+        .insert("Origin", web.origin.as_str().trim_end_matches('/').parse()?);
+    req.headers_mut().insert("Cookie", web.cookie.parse()?);
+    // Firmware websock.js deliberately omits subprotocols for this endpoint.
+    let host = web.origin.host_str().context("missing host")?;
+    use std::net::ToSocketAddrs;
+    let addresses = (host, web.origin.port_or_known_default().unwrap())
+        .to_socket_addrs()?
+        .collect::<Vec<_>>();
+    let mut tcp = None;
+    for addr in addresses {
+        if let Ok(s) = TcpStream::connect_timeout(&addr, Duration::from_secs(10)) {
+            tcp = Some(s);
+            break;
+        }
+    }
+    let tcp = tcp.context("DISCONNECTED: cannot connect to BMC WebSocket port")?;
+    tcp.set_read_timeout(Some(Duration::from_secs(10)))?;
+    tcp.set_write_timeout(Some(Duration::from_secs(10)))?;
+    tcp.set_nodelay(true)?;
+    let tls = native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(web.insecure)
+        .danger_accept_invalid_hostnames(web.insecure)
+        .build()?;
+    let config = if path == "/vm" {
+        Some(
+            tungstenite::protocol::WebSocketConfig::default()
+                .max_message_size(Some(2 * super::media::MAX_TRANSFER + 128))
+                .max_frame_size(Some(2 * super::media::MAX_TRANSFER + 128)),
+        )
+    } else {
+        None
+    };
+    let (ws, _reply) =
+        tungstenite::client_tls_with_config(req, tcp, config, Some(Connector::NativeTls(tls)))
+            .map_err(|e| anyhow::anyhow!("WebSocket upgrade failed: {e}"))?;
+    Ok(ws)
+}
+
 impl Connection {
     pub fn connect(web: WebSession) -> Result<Self> {
-        let mut req = web.ws_url.clone().into_client_request()?;
-        req.headers_mut()
-            .insert("Origin", web.origin.as_str().trim_end_matches('/').parse()?);
-        req.headers_mut().insert("Cookie", web.cookie.parse()?);
-        // Firmware websock.js deliberately omits subprotocols for this endpoint.
-        let host = web.origin.host_str().context("missing host")?;
-        use std::net::ToSocketAddrs;
-        let addresses = (host, web.origin.port_or_known_default().unwrap())
-            .to_socket_addrs()?
-            .collect::<Vec<_>>();
-        let mut tcp = None;
-        for addr in addresses {
-            if let Ok(s) = TcpStream::connect_timeout(&addr, Duration::from_secs(10)) {
-                tcp = Some(s);
-                break;
-            }
-        }
-        let tcp = tcp.context("DISCONNECTED: cannot connect to BMC WebSocket port")?;
-        tcp.set_read_timeout(Some(Duration::from_secs(10)))?;
-        tcp.set_write_timeout(Some(Duration::from_secs(10)))?;
-        tcp.set_nodelay(true)?;
-        let tls = native_tls::TlsConnector::builder()
-            .danger_accept_invalid_certs(web.insecure)
-            .danger_accept_invalid_hostnames(web.insecure)
-            .build()?;
-        let (ws, _reply) =
-            tungstenite::client_tls_with_config(req, tcp, None, Some(Connector::NativeTls(tls)))
-                .map_err(|e| anyhow::anyhow!("WebSocket upgrade failed: {e}"))?;
+        let ws = connect_socket(&web, "/")?;
         let mut c = Self {
             ws,
             buffer: VecDeque::new(),

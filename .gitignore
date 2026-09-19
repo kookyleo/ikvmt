@@ -3,6 +3,7 @@
 /node_modules/
 /tests/fixtures/*
 !/tests/fixtures/README.zh.md
+!/tests/fixtures/README.md
 *.cookies
 .env
 *.log

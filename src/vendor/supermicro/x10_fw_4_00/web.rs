@@ -85,7 +85,7 @@ impl WebSession {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(20))
-            .user_agent("ikvmt/0.2 native")
+            .user_agent(concat!("ikvmt/", env!("CARGO_PKG_VERSION"), " native"))
             .build()?;
         client
             .get(origin.clone())

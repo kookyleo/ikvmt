@@ -2,9 +2,9 @@
 
 English | [简体中文](README.zh.md)
 
-A native out-of-band console tool for humans and AI agents. It retrieves server VGA images and sends keyboard input through the BMC's HTTP/WebSocket interface. Written in Rust, it runs without a browser, Node, Python, or a model API. OCR is off by default; enabling it uses the bundled pure-Rust `ocrs + RTen` engine and embedded models. Tesseract is available only as an explicitly selected comparison engine.
+A native out-of-band console tool for humans and AI agents. It retrieves server VGA images, sends keyboard input, and attaches local ISO or raw disk images through the BMC's HTTP/WebSocket interface. Written in Rust, it runs without a browser, Node, Python, or a model API. OCR is off by default; enabling it uses the bundled pure-Rust `ocrs + RTen` engine and embedded models. Tesseract is available only as an explicitly selected comparison engine.
 
-The current adapter targets **Supermicro X10DRT-H / BMC firmware 4.00 / IPMI 2.0**. Screenshots, keyboard input, persistent sessions, and reconnection have been verified on real hardware. The firmware version determines the proprietary HTML5 iKVM protocol; `fw4.00` is not an IPMI protocol version. Other platforms have not been verified, and the tool does not automatically detect or switch vendors.
+The current adapter targets **Supermicro X10DRT-H / BMC firmware 4.00 / IPMI 2.0**. Screenshots, keyboard input, persistent sessions, reconnection, and virtual media have been verified on real hardware. The firmware version determines the proprietary HTML5 iKVM protocol; `fw4.00` is not an IPMI protocol version. Other platforms have not been verified, and the tool does not automatically detect or switch vendors.
 
 ```text
 AI agent / human → ikvmt → BMC HTTP + WebSocket → host VGA / keyboard
@@ -124,6 +124,41 @@ Each request allows up to 32 actions and a total of 4,096 text characters. All c
 
 For slower interfaces such as BIOS, set `"key_event_interval_ms": 150` at the top level of `console.act` to adjust the interval between key press/release messages. The default is 30 ms, with an allowed range of 30–1,000 ms; invalid values are rejected before sending. The tested BIOS occasionally missed consecutive arrow keys at 30 ms, so use a slower pace and check the actual selection. This interval is independent of `observe_after.delay_ms`, which controls the wait between completed input and the screenshot.
 
+## Virtual media and image ownership
+
+Virtual media is available starting with ikvmt 0.3.0. It uses a separate native WebSocket connection and does not require an open console session or a browser. The service reads local image blocks on demand; it must remain running and connected while the host uses the device.
+
+| Method | Parameters and behavior |
+| --- | --- |
+| `media.mount` | `target`, `image` (path on the service machine), `kind: "cdrom"` or `"disk"`; optional `writable` (default false), `slot` (0–2, default 0). Authentication parameters match `console.open`. Returns `media_id` |
+| `media.status` | `media_id`; returns connection state, image lock, byte counters and SCSI command/rejection counters |
+| `media.list` | Lists this process's media sessions, including disconnected sessions |
+| `media.unmount` | `media_id`; syncs the local image, requests BMC detach, stops serving and releases the image lock. Repeat calls are safe |
+
+```sh
+export IKVM_SOCKET="$PWD/artifacts/runtime/control.sock"
+ikvmt media mount 192.0.2.10 /absolute/install.iso --kind cdrom --insecure
+
+# Alternative: unmount the previous medium first. Writable access is explicit.
+ikvmt media mount 192.0.2.10 /absolute/transfer.img --kind disk --writable --insecure
+ikvmt media list
+ikvmt media status m-from-mount-response
+# After sync and filesystem unmount on the host:
+ikvmt media unmount m-from-mount-response
+```
+
+`ikvmt media` and `ikvmt call media.*` use the same API and JSON response envelope. Supply `--socket` or `IKVM_SOCKET`; the server must already be running. CLI image paths resolve relative to the caller; API paths resolve on the service machine, so prefer absolute paths. Unmount exits nonzero if BMC detach is unconfirmed. See the [media reference](docs/virtual-media.md) for full responses, errors, lifecycle and design rationale.
+
+Only existing regular files are accepted, never physical disks. CD-ROM images use 2,048-byte sectors and are always read-only; raw disk images use 512-byte sectors. Image size must be aligned and is not changed by the service. The tool exposes a block device, not a shared folder; partitioning and filesystems belong inside the image. It neither reboots the host nor changes boot order.
+
+`state: attached` means the BMC acknowledged attachment. `host_enumeration: not_observed` remains explicit: verify the host's new USB device by model and size before mounting it; never assume a fixed `/dev/sdX` name. `media.mount` is not deduplicated. If its response is lost, use `media.list` before retrying. An occupied BMC slot is rejected rather than replaced.
+
+Image ownership is dynamic: **mount/acquire → use → host sync and filesystem unmount → media.unmount/release → next owner mounts**. Read-only sessions hold shared file locks; writable sessions hold exclusive locks. Conflicts return `MEDIA_BUSY`. `image_lock` reports `shared`, `exclusive`, or `released`. The session retains its lock after a disconnect or worker panic until explicit `media.unmount`; it does not automatically reconnect, replay writes, expire ownership or steal another session. After a failure, inspect/recover the filesystem before transferring ownership. These are local advisory locks among cooperating processes, not a distributed lease or protection against other software modifying/mounting the file. Unmount it locally before exposing it remotely, and detach it remotely before mounting it locally.
+
+Each successful write is synchronized to the local image before acknowledgement; unknown commands, malformed requests and out-of-range writes fail. Connection loss during a partial write does not execute that write. A missing acknowledgement still makes the host's outcome uncertain even if bytes reached disk. `media.unmount` cannot flush the host's filesystem cache: perform host-side `sync` and filesystem unmount first. On network loss, `state: disconnected` and `error` preserve the uncertainty; 60 seconds without BMC traffic also ends serving. Local locks do not survive service process termination.
+
+Validated on the supported firmware, slot 0: ISO file reading, a 16 MiB FAT disk, remote file creation, local readback of a 1 MiB random file with matching SHA-256, and read-only write rejection. Slots 1/2, booting an installer, prolonged workloads and other firmware are not yet verified. This is an offline transfer channel, not storage for running VMs.
+
 ## Optional native OCR
 
 The `ocr` field in `console.observe` and `console.act.observe_after` accepts `off` (default), `on` / `ocrs` (bundled engine), or `tesseract` (external comparison). The bundled engine requires no Tesseract, Python, model API, or additional downloads, and does not automatically fall back to an external engine.
@@ -137,7 +172,7 @@ Run OCR on an existing screenshot to compare engines on the same frame:
 
 The native engine returns `engine: "ocrs"`, `runtime: "rten"`, `models: "bundled"`, `text`, `lines: [{text, bbox: [x, y, width, height]}]`, and `elapsed_ms`. Bounding boxes use original image coordinates and are clipped to its boundaries. Left and right columns may be returned separately; do not pair BIOS labels and values solely by text order. Selection state and recognition confidence are not provided.
 
-`status: ok` only means inference completed. OCR may misread characters, omit lines, or miss selected items. Check labels, values, positions, and highlights against the original image before changing BIOS settings. The model primarily supports Latin characters and does not guarantee Chinese recognition or exact terminal transcription. See the [validation record (Chinese)](docs/TESTING.zh.md).
+`status: ok` only means inference completed. OCR may misread characters, omit lines, or miss selected items. Check labels, values, positions, and highlights against the original image before changing BIOS settings. The model primarily supports Latin characters and does not guarantee Chinese recognition or exact terminal transcription. See the [validation record](docs/TESTING.md).
 
 Models load lazily on first use and are reused within the service process. Approximately 12.2 MB of weights are embedded in the binary. The weights are CC BY-SA 4.0; distributions containing them must include the [source attribution](models/README.md) and [model license](models/LICENSE-CC-BY-SA-4.0.txt). The project source code remains Apache-2.0.
 
@@ -155,9 +190,9 @@ Call `console.close` explicitly when finished. The stdin service cleans up sessi
 
 ## Scope and limitations
 
-- Validation currently covers one hardware model and firmware. Linux reboot, POST, BIOS navigation, saving settings, and returning to the Proxmox login screen have been tested on four matching machines. The one-time BIOS boot flag was set using ipmitool. BIOS planning, mouse input, power management, virtual media, and SOL are not implemented.
+- Validation currently covers one hardware model and firmware. Linux reboot, POST, BIOS navigation, saving settings, and returning to the Proxmox login screen have been tested on four matching machines. The one-time BIOS boot flag was set using ipmitool. BIOS planning, mouse input, power management, and SOL are not implemented. Native virtual media is described above.
 - AST2100 encoding 87 has been verified on hardware; some unknown block formats return explicit errors. Encoding 88 only accepts complete JPEG payloads and has not been verified on hardware.
-- Images represent only the visible screen. They cannot recover text that has scrolled away, distinguish stdout from stderr, retrieve exit codes, or prove that long command output is complete. Page or shorten output for the external model to inspect each screen; reliable byte transfer requires a separate explicit protocol.
+- Images represent only the visible screen. They cannot recover text that has scrolled away, distinguish stdout from stderr, retrieve exit codes, or prove that long command output is complete. Page or shorten output for the external model to inspect each screen; use explicit file transfer (for example virtual media) for exact bytes; shell completion still needs an explicit result protocol.
 - OCR is an optional aid. It still misreads symbols and characters and does not guarantee completeness.
 - There is no automatic idle cleanup, disk quota, or persistent recovery. Callers must close sessions and clean up screenshots. PNGs are created with mode 0600 on Unix, and the socket is accessible only to the local user. Screenshots may contain sensitive console content.
 - The service rejects a second active session for an identical target string. Do not use different IP/hostname aliases to open concurrent sessions to the same BMC.
@@ -167,13 +202,15 @@ Call `console.close` explicitly when finished. The stdin service cleans up sessi
 ```text
 src/interface.rs                    JSON Lines service
 src/console.rs                      Sessions, observations, input
+src/media.rs                        Media sessions and image ownership
+src/media/scsi.rs                   File-backed SCSI target
 src/ocr.rs                          Native OCR and explicit Tesseract comparison
 models/                             Embedded weights, attribution, and license
 src/vendor/supermicro/x10_fw_4_00/   Authentication, private RFB, keyboard, AST decoding
 SKILL.md                            Agent operating instructions
 SKILL.zh.md                         Chinese agent operating instructions
-docs/protocol-x10.zh.md              Protocol notes (Chinese)
-docs/TESTING.zh.md                   Validation record (Chinese)
+docs/protocol-x10.md                 Protocol notes
+docs/TESTING.md                      Validation record
 ```
 
 ```sh
@@ -182,16 +219,16 @@ cargo test --locked
 cargo clippy --all-targets --locked -- -D warnings
 ```
 
-Real BIOS screenshots and annotations stay local and are not published with the repository. With the required local fixtures, follow the [fixture notes (Chinese)](tests/fixtures/README.zh.md) to run the model test. To replay your own screenshot directory offline and check inference status and bounding-box boundaries:
+Real BIOS screenshots and annotations stay local and are not published with the repository. With the required local fixtures, follow the [fixture notes](tests/fixtures/README.md) to run the model test. To replay your own screenshot directory offline and check inference status and bounding-box boundaries:
 
 ```sh
 cargo run --release --locked --example ocr_corpus -- /path/to/screenshots /tmp/ikvmt-ocr.jsonl
 ```
 
-See the [architecture notes (Chinese)](docs/architecture.zh.md) for the design and future scope. OCR fine-tuning is an optional enhancement; see the [feasibility evaluation](docs/OCR-FINETUNE-EVALUATION.zh.md) and [data source review](docs/OCR-DATA-SOURCES.zh.md), both in Chinese. The old JavaScript implementation and browser-based port proposal have been removed and remain available in Git history.
+See the [architecture notes](docs/architecture.md) for the design and future scope. OCR fine-tuning is an optional enhancement; see the [feasibility evaluation](docs/OCR-FINETUNE-EVALUATION.md) and [data source review](docs/OCR-DATA-SOURCES.md). The old JavaScript implementation and browser-based port proposal have been removed and remain available in Git history.
 
 English documentation uses `.md`; Chinese documentation uses `.zh.md`. Write commit subjects and bodies in English.
 
-The crate packaging and release procedure is documented in the [release guide (Chinese)](docs/RELEASING.zh.md).
+The crate packaging and release procedure is documented in the [release guide](docs/RELEASING.md).
 
 [Apache License 2.0](LICENSE)

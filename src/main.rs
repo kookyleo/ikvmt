@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use ikvmt::{
     console::{OpenOptions, Session, now_ms},
     interface::{Service, lines},
@@ -12,7 +12,10 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(version, about = "Native browser-free Supermicro iKVM console")]
+#[command(
+    version,
+    about = "Native browser-free Supermicro iKVM console and virtual media"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -29,12 +32,17 @@ enum Cmd {
     /// Send a JSON request to an already running local service.
     Call {
         method: String,
-        #[arg(long)]
+        #[arg(long, env = "IKVM_SOCKET")]
         socket: PathBuf,
         #[arg(long, conflicts_with = "request_file")]
         params: Option<String>,
         #[arg(long)]
         request_file: Option<PathBuf>,
+    },
+    /// Attach local images, inspect sessions, or detach. Requires a running service.
+    Media {
+        #[command(subcommand)]
+        command: MediaCmd,
     },
     /// Connect read-only, export one image, then release the session.
     Shot {
@@ -66,6 +74,128 @@ enum Cmd {
         #[arg(long, value_enum, default_value = "ocrs")]
         engine: ikvmt::ocr::Mode,
     },
+}
+
+#[derive(Args)]
+struct MediaSocket {
+    /// Socket of an already running ikvmt service.
+    #[arg(long, env = "IKVM_SOCKET")]
+    socket: PathBuf,
+}
+
+#[derive(Subcommand)]
+enum MediaCmd {
+    /// Attach an existing image. Read-only by default; locks are automatic.
+    Mount {
+        target: String,
+        image: PathBuf,
+        #[arg(long, value_enum)]
+        kind: ikvmt::media::Kind,
+        /// Allow host writes; requires exclusive access. Only valid for disk images.
+        #[arg(long)]
+        writable: bool,
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u8).range(0..=2))]
+        slot: u8,
+        #[arg(long, env = "IKVM_USER", default_value = "ADMIN")]
+        username: String,
+        /// Name of the password variable in the SERVICE environment.
+        #[arg(long, default_value = "IKVM_PASS")]
+        password_env: String,
+        #[arg(long, default_value = "supermicro-x10-fw4.00")]
+        profile: String,
+        #[arg(long)]
+        insecure: bool,
+        #[command(flatten)]
+        connection: MediaSocket,
+    },
+    /// Show connection, image lock and I/O counters as JSON.
+    Status {
+        media_id: String,
+        #[command(flatten)]
+        connection: MediaSocket,
+    },
+    /// List this service's media sessions as JSON, including released sessions.
+    List {
+        #[command(flatten)]
+        connection: MediaSocket,
+    },
+    /// Detach and release the lock. Sync/unmount the HOST filesystem first.
+    Unmount {
+        media_id: String,
+        #[command(flatten)]
+        connection: MediaSocket,
+    },
+}
+
+impl MediaCmd {
+    fn request(self) -> Result<(PathBuf, &'static str, Value)> {
+        let (connection, method, params) = match self {
+            Self::Mount {
+                target,
+                image,
+                kind,
+                writable,
+                slot,
+                username,
+                password_env,
+                profile,
+                insecure,
+                connection,
+            } => {
+                if kind == ikvmt::media::Kind::Cdrom && writable {
+                    bail!(
+                        "INVALID_ARGUMENT: CD-ROM is read-only; use --kind disk for writable images"
+                    );
+                }
+                // CLI paths belong to the caller; send an absolute path to the service.
+                let image = std::fs::canonicalize(image).context("cannot resolve image path")?;
+                (
+                    connection,
+                    "media.mount",
+                    json!({"target":target,"image":image,"kind":kind,"writable":writable,"slot":slot,"username":username,"password_env":password_env,"profile":profile,"insecure":insecure}),
+                )
+            }
+            Self::Status {
+                media_id,
+                connection,
+            } => (connection, "media.status", json!({"media_id":media_id})),
+            Self::List { connection } => (connection, "media.list", json!({})),
+            Self::Unmount {
+                media_id,
+                connection,
+            } => (connection, "media.unmount", json!({"media_id":media_id})),
+        };
+        Ok((connection.socket, method, params))
+    }
+}
+
+fn call_service(socket: PathBuf, method: &str, params: Value) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixStream;
+        let mut stream = UnixStream::connect(socket)?;
+        serde_json::to_writer(
+            &mut stream,
+            &json!({"id":now_ms(),"method":method,"params":params}),
+        )?;
+        writeln!(stream)?;
+        stream.flush()?;
+        let mut response = String::new();
+        BufReader::new(stream).read_line(&mut response)?;
+        if response.is_empty() {
+            bail!("service disconnected before a response; inspect state before retrying");
+        }
+        print!("{response}");
+        let v: Value = serde_json::from_str(&response)?;
+        if v.get("error").is_some()
+            || (method == "media.unmount" && v["result"]["state"] != "detached")
+        {
+            std::process::exit(1);
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    bail!("Unix sockets unavailable")
 }
 
 fn main() {
@@ -114,29 +244,11 @@ fn run() -> Result<()> {
             } else {
                 serde_json::from_str(params.as_deref().unwrap_or("{}"))?
             };
-            #[cfg(unix)]
-            {
-                use std::os::unix::net::UnixStream;
-                let mut stream = UnixStream::connect(socket)?;
-                serde_json::to_writer(
-                    &mut stream,
-                    &json!({"id":now_ms(),"method":method,"params":p}),
-                )?;
-                writeln!(stream)?;
-                stream.flush()?;
-                let mut response = String::new();
-                BufReader::new(stream).read_line(&mut response)?;
-                if response.is_empty() {
-                    bail!("service disconnected before a response; do not blindly retry input")
-                }
-                print!("{response}");
-                let v: Value = serde_json::from_str(&response)?;
-                if v.get("error").is_some() {
-                    std::process::exit(1);
-                }
-            }
-            #[cfg(not(unix))]
-            bail!("Unix sockets unavailable");
+            call_service(socket, &method, p)?;
+        }
+        Cmd::Media { command } => {
+            let (socket, method, params) = command.request()?;
+            call_service(socket, method, params)?;
         }
         Cmd::Shot {
             target,

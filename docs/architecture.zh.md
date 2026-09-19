@@ -1,26 +1,30 @@
 # 设计说明
 
-ikvmt 为人和 AI Agent 提供通用带外控制台交互。当前实现限定 Supermicro X10DRT-H / BMC 固件 4.00，交付为原生 Rust 程序。模型负责理解画面和规划动作，工具负责传输、图像、键盘及可核对的操作结果。
+[English](architecture.md) | 简体中文
+
+ikvmt 为人和 AI Agent 提供通用带外控制台交互。当前实现限定 Supermicro X10DRT-H / BMC 固件 4.00，交付为原生 Rust 程序。模型负责理解画面和规划动作，工具负责传输、图像、键盘、虚拟介质及可核对的操作结果。
 
 ## 模块与数据流
 
 ```text
 CLI / JSON Lines
        ↓
-会话与观察（console）
+控制台会话（console） / 介质会话（media）
        ↓
 厂商适配（vendor/supermicro/x10_fw_4_00）
        ├── HTTP 登录及注销
        ├── WebSocket / Insyde RFB
        ├── AST2100 帧缓冲解码
-       └── HID 键盘报文
+       ├── HID 键盘报文
+       └── /vm 虚拟 USB 块设备
 
 帧缓冲 → PNG + 元数据 → 可选 ocrs / RTen → 调用方视觉模型
 ```
 
-- `src/main.rs` 提供服务、单次截图、离线解码、OCR 和 socket 调用入口。
+- `src/main.rs` 提供服务、media 子命令、单次截图、离线解码、OCR 和 socket 调用入口。
 - `src/interface.rs` 处理 JSON Lines 请求、稳定错误外层及服务内会话列表。
 - `src/console.rs` 持有会话、视频接收线程、观察历史及输入去重记录。
+- `src/media.rs` 管理独立介质线程与镜像锁，`src/media/scsi.rs` 提供文件支持的 SCSI 块设备；厂商 `media.rs` 处理 `/vm` WebSocket 和 USB BOT 报文。
 - `src/vendor/` 隔离厂商及固件协议；增加其他固件应增加明确适配，不默认复用未知协议。
 - `src/ocr.rs` 使用随程序打包的 ONNX 模型。Tesseract 是显式选择的对照引擎，不自动回退。
 
@@ -36,11 +40,17 @@ CLI / JSON Lines
 
 凭据从服务环境读取；文本与按键在发送前校验。程序不自动登录宿主机、清屏、发送 Ctrl+C 或退出。适配器释放 KVM 时尽力释放按键并注销 BMC。
 
+## 虚拟介质
+
+介质挂载先锁定已有普通文件，再认证并检查 BMC 槽位。默认只读，共享锁；显式可写使用独占锁。每条完整写入在本机同步后回复成功，不自动重连或重放。会话保留镜像句柄，即使工作线程因断线结束或 panic，直到显式卸载或服务退出才释放锁。主机卸载文件系统、BMC 拔出、本机释放文件锁是三个不同动作。状态分别保留 BMC 接入、连接错误、镜像锁与读写计数，不从这些字段推断主机已枚举或干净卸载。
+
+接口与所有权规则见[介质参考](virtual-media.zh.md)。
+
 ## 后续边界
 
 1. 验证真实网络故障发生在按下/释放之间的行为、长时间连接、独立无信号恢复和其他平台构建。
 2. 若需要完整、可校验的 shell 结果，新增有完成标记、分块、长度/校验及恢复机制的回传协议。截图/OCR 无法提供原始 stdout、stderr 和退出码保证。
 3. OCR 微调与交互状态模型属于可选增强，详见 [微调评估](OCR-FINETUNE-EVALUATION.zh.md)。
-4. 根据具体需求增加其他厂商适配、MCP、鼠标、电源或虚拟介质能力；这些不是当前已实现功能。
+4. 根据具体需求增加其他厂商适配、MCP、鼠标、电源能力；这些不是当前已实现功能。
 
 可执行接口见 [README](../README.zh.md)，验证证据与限制见 [TESTING](TESTING.zh.md)。

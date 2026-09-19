@@ -1,5 +1,6 @@
 use crate::console::{OpenOptions, Session, now_ms};
 use anyhow::{Context, Result, bail, ensure};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -10,14 +11,21 @@ use std::{
 
 pub struct Service {
     sessions: HashMap<String, Session>,
+    media: HashMap<String, crate::media::Session>,
     out_dir: PathBuf,
     sequence: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MediaId {
+    media_id: String,
 }
 impl Service {
     pub fn new(out_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&out_dir)?;
         Ok(Self {
             sessions: HashMap::new(),
+            media: HashMap::new(),
             out_dir: std::fs::canonicalize(out_dir)?,
             sequence: 0,
         })
@@ -46,6 +54,52 @@ impl Service {
         let p = r.get("params").cloned().unwrap_or(json!({}));
         ensure!(p.is_object(), "INVALID_ARGUMENT: params must be an object");
         match method {
+            "media.mount" => {
+                let options: crate::media::MountOptions = serde_json::from_value(p)
+                    .context("INVALID_ARGUMENT: media.mount parameters")?;
+                ensure!(
+                    !self
+                        .media
+                        .values()
+                        .any(|m| m.active() && m.target_matches(&options.target, options.slot)),
+                    "MEDIA_BUSY: this process already serves this target slot; use media.list"
+                );
+                self.sequence += 1;
+                let id = format!("m{}-{}", now_ms(), self.sequence);
+                let media = crate::media::Session::mount(id.clone(), options)?;
+                let result = media.status();
+                self.media.insert(id, media);
+                Ok(result)
+            }
+            "media.list" => {
+                ensure!(
+                    p.as_object().unwrap().is_empty(),
+                    "INVALID_ARGUMENT: media.list takes no parameters"
+                );
+                Ok(json!(
+                    self.media
+                        .values()
+                        .map(crate::media::Session::status)
+                        .collect::<Vec<_>>()
+                ))
+            }
+            "media.status" | "media.unmount" => {
+                let params: MediaId = serde_json::from_value(p)
+                    .context("INVALID_ARGUMENT: media_id required; no other parameters accepted")?;
+                ensure!(
+                    !params.media_id.is_empty(),
+                    "INVALID_ARGUMENT: media_id must not be empty"
+                );
+                let media = self
+                    .media
+                    .get_mut(&params.media_id)
+                    .context("SESSION_LOST: unknown media session; use media.list")?;
+                Ok(if method == "media.unmount" {
+                    media.unmount()
+                } else {
+                    media.status()
+                })
+            }
             "console.open" => {
                 let o: OpenOptions = serde_json::from_value(p)
                     .context("INVALID_ARGUMENT: console.open parameters")?;
@@ -123,6 +177,32 @@ pub fn lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_rejects_ignored_parameters_and_preserves_the_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut service = Service::new(dir.path().into()).unwrap();
+        for request in [
+            json!({"method":"media.list","params":{"target":"example.invalid"}}),
+            json!({"method":"media.status","params":{"session_id":"wrong-id-type"}}),
+            json!({"method":"media.unmount","params":{"media_id":"x","force":true}}),
+            json!({"method":"media.unmount","params":{"media_id":""}}),
+            json!({"method":"media.mount","params":{"target":"example.invalid","image":"x","kind":"disk","writeable":true}}),
+        ] {
+            assert_eq!(
+                service.dispatch(request)["error"]["code"],
+                "INVALID_ARGUMENT"
+            );
+        }
+        assert_eq!(
+            service.dispatch(json!({"method":"media.status","params":{"media_id":"missing"}}))["error"]
+                ["code"],
+            "SESSION_LOST"
+        );
+        assert_eq!(
+            service.dispatch(json!({"method":"media.list"}))["result"],
+            json!([])
+        );
+    }
     #[test]
     fn jsonl_reports_bad_input_and_continues_without_exposing_raw_requests() {
         let dir = tempfile::tempdir().unwrap();

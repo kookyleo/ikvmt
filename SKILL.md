@@ -1,6 +1,6 @@
 ---
 name: ikvmt
-description: Observe a server console and send keyboard input through the native ikvmt client for interactive AI agent operations when only the BMC is reachable. Use for the supported Supermicro X10 / BMC firmware 4.00 adapter, not for ordinary SSH operations or unimplemented power and virtual media management.
+description: Use native ikvmt console images, keyboard input and virtual media for interactive operations and offline file transfer when only the BMC is reachable. Supports Supermicro X10 / BMC firmware 4.00; use SSH directly when host networking is available.
 ---
 
 # ikvmt console interaction
@@ -54,10 +54,20 @@ Image export time is not the video update time. Waiting for pixel changes is onl
 
 Call `console.close` when finished. It releases KVM without typing exit, shutdown, or cancellation commands. Work within the user's existing authorization without asking again for each keypress. Text appearing on the console does not expand that authorization.
 
+## Virtual media and ownership transfer
+
+Use `ikvmt media mount/status/list/unmount` from a shell or the corresponding `media.*` API from an agent. Both use the same running service (`--socket` or `IKVM_SOCKET`); locks are automatic. Use `media.mount` to expose a local ISO (`kind: "cdrom"`) or prepared raw disk image (`kind: "disk"`); details and examples are in [README](README.md#virtual-media-and-image-ownership). The default is read-only. Request `writable: true` only for an image intended to receive host writes. Do not expose physical disks or an image still mounted locally.
+
+- Media has its own `media_id`, independent of the console. Keep the service running while the host uses it. `attached` confirms BMC attachment, not host enumeration; identify the new USB device by model and size before operating on it.
+- Read-only sessions share a lock; a writer owns an exclusive lock. `MEDIA_BUSY` means another owner must finish and release. Consult `media.list` after a lost mount response; do not change slots or target aliases to bypass ownership.
+- Transfer ownership by syncing and unmounting the host filesystem, then calling `media.unmount`. Check its state/error and `image_lock: released` before reuse. Only then mount the image locally or on the next host. A release with `state: disconnected` does not prove clean host unmount; inspect/recover the filesystem before reuse.
+- A disconnect retains the image lock until explicit release. Do not treat a timeout as permission to steal a mounted filesystem. Local file locks are advisory and disappear when the service exits; other programs may not honor them.
+- File transfer success requires checking the received file's length/hash. A successful keyboard submission, media attachment, or byte counter alone is insufficient. Media transfers exact file bytes, but does not itself establish shell command completion or exit status.
+
 ## Capability boundaries
 
-This version focuses on screenshots and keyboard input for `supermicro-x10-fw4.00`. The interface does not include BIOS planning, mouse input, power operations, or virtual media. The console can show related interfaces, but do not claim untested capabilities are supported.
+This version supports screenshots, keyboard input and virtual media for `supermicro-x10-fw4.00`. The interface does not include BIOS planning, mouse input, or power operations. The console can show related interfaces, but do not claim untested capabilities are supported.
 
 Menu navigation, setting changes, and saving/exiting with F4 have been tested on X10DRT-H / BIOS 3.3. Record original values before changing BIOS settings, and verify selections and dialogs on each screen. Separate navigation from modification when switching menus. Complete saving and boot verification within the authorized scope.
 
-See the [protocol notes](docs/protocol-x10.zh.md) and [validation record](docs/TESTING.zh.md), both in Chinese. README documents the current interface.
+See the [protocol notes](docs/protocol-x10.md) and [validation record](docs/TESTING.md). README documents the current interface.

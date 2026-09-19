@@ -1,5 +1,7 @@
 # Bundled OCR models
 
+English | [简体中文](README.zh.md)
+
 Unmodified pre-trained models by Robert Knight, used by [ocrs](https://github.com/robertknight/ocrs) with the pure-Rust [RTen](https://github.com/robertknight/rten) runtime.
 
 Downloaded 2026-09-18 from the URLs in the upstream example download script:

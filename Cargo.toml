@@ -1,6 +1,6 @@
 [package]
 name = "ikvmt"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Native Supermicro iKVM console tools for humans and AI agents"
 license = "Apache-2.0"
@@ -11,10 +11,10 @@ keywords = ["bmc", "ipmi", "ikvm", "console", "automation"]
 categories = ["command-line-utilities", "network-programming"]
 include = [
     "/Cargo.toml", "/Cargo.lock", "/LICENSE",
-    "/README*.md", "/SKILL*.md", "/docs/*.zh.md",
+    "/README*.md", "/SKILL*.md", "/docs/*.md",
     "/src/**/*.rs", "/examples/*.rs", "/tests/*.rs",
-    "/tests/fixtures/README.zh.md",
-    "/models/README.md", "/models/LICENSE-CC-BY-SA-4.0.txt",
+    "/tests/fixtures/README*.md",
+    "/models/README*.md", "/models/LICENSE-CC-BY-SA-4.0.txt",
 ]
 
 [workspace]

@@ -1,5 +1,6 @@
 pub mod codec;
 pub mod keyboard;
+pub mod media;
 pub mod protocol;
 mod tables;
 pub mod web;
